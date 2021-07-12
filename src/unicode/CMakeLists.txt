@@ -33,6 +33,9 @@ add_library(unicode::core ALIAS unicode)
 target_include_directories(unicode PUBLIC ${PROJECT_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(unicode PUBLIC fmt::fmt-header-only)
 
+# TODO: if ARCH == x86-64
+target_compile_options(unicode PUBLIC -mavx512bw)
+
 # --------------------------------------------------------------------------------------------------------
 # unicode_test
 if(LIBUNICODE_TESTING)
