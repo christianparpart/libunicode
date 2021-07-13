@@ -19,11 +19,146 @@
 #include <iterator>
 #include <optional>
 
+#if defined(__linux__)
+    #include <emmintrin.h>
+    #include <immintrin.h>
+    #include <xmmintrin.h>
+#endif
+
 namespace unicode {
 
 template <typename T> struct decoder;
 template <typename T> struct encoder;
 
+struct decoder_status
+{
+    bool success;
+    size_t read_offset;
+    size_t write_offset;
+};
+
+// {{{ SSE optimizations
+
+#if !defined(_MSC_VER)
+    #define KEWB_ALIGN_FN  __attribute__((aligned (128)))
+    #ifdef __OPTIMIZE__
+        #define LIBUNICODE_FORCE_INLINE   inline __attribute__((always_inline))
+    #else
+        #define LIBUNICODE_FORCE_INLINE   inline
+    #endif
+#else
+    #define KEWB_ALIGN_FN
+#endif
+
+LIBUNICODE_FORCE_INLINE uint32_t trailingZeros(int32_t x) noexcept
+{
+    return  __builtin_ctz((unsigned int) x);
+}
+
+namespace accelerator
+{
+    struct sse {};
+    struct avx512bw {};
+};
+
+template <typename Accelerator>
+void convertAsciiBlockOnce(unsigned char const*& _begin, char32_t*& _output) noexcept;
+
+#if defined(__AVX512BW__)
+template <>
+LIBUNICODE_FORCE_INLINE
+void convertAsciiBlockOnce<accelerator::avx512bw>(unsigned char const*& _begin, char32_t*& _output) noexcept
+{
+    __m128i  input    = _mm_loadu_si128((__m128i const*) _begin); // VMOVDQU: load 16 bytes
+    uint32_t mask     = _mm_movemask_epi8(input);                 // VPMOVMSKB: Determine which octets have high bit set
+    __m512i  extended = _mm512_cvtepu8_epi32(input);              // VPMOVXZBD: packed zero-extend bytes to DWORD's
+    _mm512_store_epi64(_output, extended);                        // VMOVDQA32: Write to memory
+
+#if 1
+    auto const incr = /* mask == 0 ? 16 : */ trailingZeros(mask);
+    _begin += incr;
+    _output += incr;
+#else
+    if (mask == 0) {
+        _begin += 16;
+        _output += 16;
+    } else {
+        auto const incr = trailingZeros(mask);
+        _begin += incr;
+        _output += incr;
+    }
+#endif
+}
+#endif
+
+#if defined(__SSE__)
+template <>
+LIBUNICODE_FORCE_INLINE
+void convertAsciiBlockOnce<accelerator::sse>(unsigned char const*& _begin, char32_t*& _output) noexcept
+{
+#if defined(__linux__)
+    __m128i     chunk, half, qrtr, zero;
+    int32_t     mask, incr;
+
+    zero  = _mm_set1_epi8(0);                           //- Zero out the interleave register
+    chunk = _mm_loadu_si128((__m128i const*) _begin);     //- Load a register with 8-bit bytes
+    mask  = _mm_movemask_epi8(chunk);                   //- Determine which octets have high bit set
+
+    half = _mm_unpacklo_epi8(chunk, zero);              //- Unpack bytes 0-7 into 16-bit words
+    qrtr = _mm_unpacklo_epi16(half, zero);              //- Unpack words 0-3 into 32-bit dwords
+    _mm_storeu_si128((__m128i*) _output, qrtr);            //- Write to memory
+    qrtr = _mm_unpackhi_epi16(half, zero);              //- Unpack words 4-7 into 32-bit dwords
+    _mm_storeu_si128((__m128i*) (_output + 4), qrtr);      //- Write to memory
+
+    half = _mm_unpackhi_epi8(chunk, zero);              //- Unpack bytes 8-15 into 16-bit words
+    qrtr = _mm_unpacklo_epi16(half, zero);              //- Unpack words 8-11 into 32-bit dwords
+    _mm_storeu_si128((__m128i*) (_output + 8), qrtr);      //- Write to memory
+    qrtr = _mm_unpackhi_epi16(half, zero);              //- Unpack words 12-15 into 32-bit dwords
+    _mm_storeu_si128((__m128i*) (_output + 12), qrtr);     //- Write to memory
+
+    //- If no bits were set in the mask, then all 16 code units were ASCII, and therefore
+    //  both pointers are advanced by 16.
+    //
+    if (mask == 0)
+    {
+        _begin += 16;
+        _output += 16;
+    }
+
+    //- Otherwise, the number of trailing (low-order) zero bits in the mask indicates the number
+    //  of ASCII code units starting from the lowest byte address.
+    else
+    {
+        incr = trailingZeros(mask);
+        _begin += incr;
+        _output += incr;
+    }
+#else
+    // other platforms?
+#endif
+}
+#endif
+
+// void sseConvertAsciiBlock(unsigned char const*& _begin, unsigned char const* _end, uint32_t* _output)
+// {
+//     static_assert(sizeof(__m128i) == 16);
+//     assert(std::distance(_begin, _end) % 16 == 0)
+//     while (_begin <= _end - sizeof(__m128i))
+//     {
+//         if (*_begin < 0x80)
+//             sseConvertAsciiBlockOnce(_begin, _output);
+//         else if (auto const opt = (*this)(_begin, _end))
+//             *_output++ = *opt;
+//         else
+//             return decoder_status{
+//                 false,
+//                 static_cast<size_t>(_begin - inputBegin),
+//                 static_cast<size_t>(_output - outputBegin),
+//             };
+//     }
+// }
+
+// }}}
 template<> struct encoder<char> // {{{
 {
     template <typename OutputIterator>
@@ -59,6 +194,52 @@ template<> struct decoder<char> // {{{
     char32_t character = 0;
     unsigned expectedLength = 0;
     unsigned currentLength = 0;
+
+    decoder_status operator()(uint8_t const* _begin,
+                              uint8_t const* _end,
+                              char32_t* _output)
+    {
+        uint8_t const* inputBegin = _begin;
+        char32_t const* outputBegin = _output;
+
+#if defined(__SSE__) // TODO: does this work on Windows?
+        // TODO: ensure we can provide more accelerators: SSE4, AVX, AVX512
+        while (_begin <= _end - sizeof(__m128i))
+        {
+            if (*_begin < 0x80)
+                convertAsciiBlockOnce<accelerator::sse>(_begin, _output);
+                //convertAsciiBlockOnce<accelerator::avx512bw>(_begin, _output);
+            else if (auto const opt = (*this)(_begin, _end))
+                *_output++ = *opt;
+            else
+                return decoder_status{
+                    false,
+                    static_cast<size_t>(_begin - inputBegin),
+                    static_cast<size_t>(_output - outputBegin),
+                };
+        }
+#endif
+
+        while (_begin < _end)
+        {
+            if (*_begin < 0x80)
+                *_output++ = *_begin++;
+            else if (auto const opt = (*this)(_begin, _end))
+                *_output++ = *opt;
+            else
+                return decoder_status{
+                    false,
+                    static_cast<size_t>(_begin - inputBegin),
+                    static_cast<size_t>(_output - outputBegin),
+                };
+        }
+
+        return decoder_status{
+            true,
+            static_cast<size_t>(_begin - inputBegin),
+            static_cast<size_t>(_output - outputBegin),
+        };
+    }
 
     constexpr std::optional<char32_t> operator()(uint8_t _byte)
     {
@@ -106,11 +287,15 @@ template<> struct decoder<char> // {{{
 
     template <
         typename InputIterator,
+        typename InputSentinel,
         std::enable_if_t<std::is_convertible_v<decltype(*std::declval<InputIterator>()), char>, int> = 0
     >
-    constexpr std::optional<char32_t> operator()(InputIterator& _input)
+    constexpr std::optional<char32_t> operator()(InputIterator& _input, InputSentinel _end)
     {
         using std::nullopt;
+
+        if (_input == _end)
+            return std::nullopt;
 
         auto const ch0 = uint8_t(*_input++);
         if (ch0 < 0x80) // 0xxx_xxxx
@@ -121,6 +306,9 @@ template<> struct decoder<char> // {{{
 
         if (ch0 < 0xE0) // 110x_xxxx 10xx_xxxx
         {
+            if (_input == _end)
+                return std::nullopt;
+
             auto const ch1 = uint8_t(*_input++);
             if ((ch1 >> 6) != 2)
                 return nullopt;
@@ -129,6 +317,9 @@ template<> struct decoder<char> // {{{
 
         if (ch0 < 0xF0) // 1110_xxxx 10xx_xxxx 10xx_xxxx
         {
+            if (!(_input + 1 < _end))
+                return std::nullopt;
+
             auto const ch1 = uint8_t(*_input++);
             if (ch1 >> 6 != 2)
                 return nullopt;
@@ -139,6 +330,8 @@ template<> struct decoder<char> // {{{
         }
         if (ch0 < 0xF8) // 1111_0xxx 10xx_xxxx 10xx_xxxx 10xx_xxxx
         {
+            if (!(_input + 2 < _end))
+                return std::nullopt;
             auto const ch1 = uint8_t(*_input++);
             if (ch1 >> 6 != 2)
                 return nullopt;
@@ -152,6 +345,8 @@ template<> struct decoder<char> // {{{
         }
         if (ch0 < 0xFC) // 1111_10xx 10xx_xxxx 10xx_xxxx 10xx_xxxx 10xx_xxxx
         {
+            if (!(_input + 3 < _end))
+                return std::nullopt;
             auto const ch1 = uint8_t(*_input++);
             if (ch1 >> 6 != 2)
                 return nullopt;
@@ -261,10 +456,13 @@ template<> struct encoder<char32_t> // {{{ (no-op)
 template<> struct decoder<char32_t> // {{{ (no-op)
 {
 
-    template <typename InputIterator>
-    constexpr std::optional<char32_t> operator()(InputIterator& _input)
+    template <typename InputIterator, typename InputSentinel>
+    constexpr std::optional<char32_t> operator()(InputIterator& _input, InputSentinel _end)
     {
-        return *_input++;
+        if (_input != _end)
+            return *_input++;
+        else
+            return std::nullopt;
     }
 }; // }}}
 template<> struct encoder<wchar_t> // {{{
@@ -321,7 +519,7 @@ OutputIterator convert_to(std::basic_string_view<S> _input, OutputIterator _outp
         encoder<T> write{};
         while (i != e)
         {
-            auto const outChar = read(i);
+            auto const outChar = read(i, e);
             if (outChar.has_value())
                 _output = write(outChar.value(), _output);
         }
