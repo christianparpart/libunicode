@@ -6,7 +6,7 @@ cmake_policy(SET CMP0092 NEW)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-project(libunicode VERSION "0.9.4" LANGUAGES CXX)
+project(libunicode VERSION "0.9.5" LANGUAGES CXX)
 
 # Suppress CMake "unused variable" warning for CMAKE_TOOLCHAIN_FILE
 # when using presets that reference vcpkg.
