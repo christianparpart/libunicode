@@ -16,51 +16,73 @@
 namespace unicode
 {
 
+namespace
+{
+    // Tests whether @p value is a byte that may start a character (Unicode Table 3-7): C2..F4.
+    // C0 and C1 would start overlong forms, and F5..FF would encode past U+10FFFF.
+    constexpr bool is_lead_byte(uint8_t value) noexcept
+    {
+        return 0xC2 <= value && value <= 0xF4;
+    }
+
+    // Tests whether @p value may follow the lead byte the state holds, as the character's second byte.
+    // The lead's payload bits identify the four leads whose second byte is narrower than 80..BF:
+    // E0 (A0..BF), ED (80..9F), F0 (90..BF) and F4 (80..8F); the rest of 80..BF is Table 3-7's
+    // exclusion of overlong forms, surrogates and codepoints past U+10FFFF.
+    constexpr bool is_valid_second_byte(utf8_decoder_state const& state, uint8_t value) noexcept
+    {
+        if (state.expectedLength == 3)
+        {
+            if (state.character == 0x0)
+                return value >= 0xA0;
+            if (state.character == 0xD)
+                return value <= 0x9F;
+        }
+        else if (state.expectedLength == 4)
+        {
+            if (state.character == 0x0)
+                return value >= 0x90;
+            if (state.character == 0x4)
+                return value <= 0x8F;
+        }
+        return true;
+    }
+} // namespace
+
 ConvertResult from_utf8(utf8_decoder_state& state, uint8_t value) noexcept
 {
     if (!state.expectedLength)
     {
+        state.currentLength = 1;
         if ((value & 0b1000'0000) == 0)
-        {
-            state.currentLength = 1;
             return Success { value };
-        }
-        else if ((value & 0b1110'0000) == 0b1100'0000)
+        if (!is_lead_byte(value))
+            return Invalid {}; // a stray continuation byte, C0, C1, or F5..FF
+        if (value < 0xE0)
         {
-            state.currentLength = 1;
             state.expectedLength = 2;
             state.character = value & 0b0001'1111;
         }
-        else if ((value & 0b1111'0000) == 0b1110'0000)
+        else if (value < 0xF0)
         {
-            state.currentLength = 1;
             state.expectedLength = 3;
             state.character = value & 0b0000'1111;
         }
-        else if ((value & 0b1111'1000) == 0b1111'0000)
+        else
         {
-            state.currentLength = 1;
             state.expectedLength = 4;
             state.character = value & 0b0000'0111;
         }
-        else
-        {
-            state.currentLength = 1;
-            state.expectedLength = 0;
-            return Invalid {};
-        }
     }
-    // clang-format off
-    else if ((value & 0b1110'0000) == 0b1100'0000
-          || (value & 0b1111'0000) == 0b1110'0000
-          || (value & 0b1111'1000) == 0b1111'0000)
-    // clang-format on
+    else if ((value & 0b1100'0000) != 0b1000'0000 || (state.currentLength == 1 && !is_valid_second_byte(state, value)))
     {
-        // We have a new codepoint, but the previous one was incomplete.
+        // The character is broken off. Its bytes so far are one maximal subpart.
         state.expectedLength = 0;
-        // Return Invalid for the current incomplete codepoint,
-        // but have already started the next codepoint.
-        from_utf8(state, value);
+        // A byte that may start a character does so right here, and is consumed. Any other byte
+        // (ASCII, a continuation byte out of range, C0, C1, F5..FF) is not consumed: the caller
+        // feeds it again, now at a character boundary.
+        if (is_lead_byte(value))
+            from_utf8(state, value);
         return { Invalid {} };
     }
     else

@@ -878,3 +878,24 @@ TEST_CASE("normalization.unicode_conformance", "[normalization]")
             FAIL("NFKD mismatch at line " << tc.line_number << ": " << tc.comment);
     }
 }
+
+TEST_CASE("normalization_stream.utf8_ill_formed_byte_is_fed_again_as_itself", "[normalization]")
+{
+    auto const run = [](std::string_view input) {
+        utf8_normalizer norm(Normalization_Form::NFC);
+        auto output = std::string(norm.feed(input));
+        output += norm.flush();
+        return output;
+    };
+
+    // C3 is cut off by 'A', which must not be lost.
+    CHECK(run("\xC3"
+              "A")
+          == "\xEF\xBF\xBD"
+             "A");
+    // Maximal subparts: C2, C0, C2 yield three replacement characters.
+    CHECK(run("\xC2\xC0\xC2"
+              "A")
+          == "\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD"
+             "A");
+}

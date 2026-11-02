@@ -911,8 +911,7 @@ TEST_CASE("scan.ill_formed_utf8.ends_the_run_before_it")
         ill_formed_case { "the lead byte is ill-formed, not the ASCII that cuts it off", "ab\xE2hi", 80, "ab", 2, 2, 0 },
         ill_formed_case { "two bytes of three, cut off by ASCII", "ab\xE2\x94hi", 80, "ab", 2, 2, 0 },
         ill_formed_case { "cut off by a control", "ab\xE2\x1B[m", 80, "ab", 2, 2, 0 },
-        ill_formed_case {
-            "cut off by FF, which from_utf8() takes for a continuation byte", "ab\xE2\xFF\xBFxy", 80, "ab", 2, 2, 0 },
+        ill_formed_case { "cut off by FF, which can never continue a character", "ab\xE2\xFF\xBFxy", 80, "ab", 2, 2, 0 },
         ill_formed_case { "cut off by another lead byte, whose character is left whole", "ab\xE2\xC3\xA9", 80, "ab", 2, 2, 0 },
         ill_formed_case { "a stray continuation byte behind a wide character", "\xE4\xB8\xAD\xBFx", 80, "\xE4\xB8\xAD", 2, 3, 0 },
         ill_formed_case {
@@ -1027,7 +1026,7 @@ TEST_CASE("scan.ill_formed_utf8.cutting_off_a_character_an_earlier_call_began")
         "hi"sv,       // ASCII
         "\x94hi"sv,   // one more byte of the character, then ASCII
         "\xC3\xA9"sv, // another lead byte
-        "\xFF"sv,     // a byte that from_utf8() would take for a continuation byte
+        "\xFF"sv,     // a byte that never continues a character
     };
 
     for (auto const continuation: Continuations)
@@ -1049,4 +1048,105 @@ TEST_CASE("scan.ill_formed_utf8.cutting_off_a_character_an_earlier_call_began")
     }
 }
 
+// {{{ Table 3-7 enforcement
+
+namespace
+{
+/// Ill-formed byte sequences that the decoder must reject at the second byte or the lead byte itself.
+auto constexpr TableThreeSevenViolations = std::array {
+    "\xC0\x80"sv,         // overlong NUL
+    "\xC1\xBF"sv,         // overlong U+007F
+    "\xC0\x9B"sv,         // overlong ESC (0x9B is a C1 control on its own)
+    "\xE0\x80\xAF"sv,     // overlong '/'
+    "\xE0\x9F\xBF"sv,     // overlong U+07FF
+    "\xED\xA0\x80"sv,     // surrogate U+D800
+    "\xED\xBF\xBF"sv,     // surrogate U+DFFF
+    "\xF0\x80\x80\x80"sv, // overlong NUL
+    "\xF0\x8F\xBF\xBF"sv, // overlong U+FFFF
+    "\xF4\x90\x80\x80"sv, // U+110000
+    "\xF5\x80\x80\x80"sv, // lead byte past U+10FFFF
+    "\xFF"sv,             // never used
+};
+
+/// Sequences at the edges of Table 3-7 that remain well-formed.
+auto constexpr TableThreeSevenBoundaries = std::array {
+    "\xC2\x80"sv,     "\xDF\xBF"sv,     "\xE0\xA0\x80"sv,     "\xED\x9F\xBF"sv,
+    "\xEE\x80\x80"sv, "\xEF\xBF\xBF"sv, "\xF0\x90\x80\x80"sv, "\xF4\x8F\xBF\xBF"sv,
+};
+} // namespace
+
+TEST_CASE("scan.table_3_7.violations_end_the_scan_in_front_of_them")
+{
+    for (auto const violation: TableThreeSevenViolations)
+    {
+        INFO("violation: " << escape(violation));
+        auto const text = "ab"s + std::string(violation) + "cd"s;
+        auto state = unicode::scan_state {};
+        auto const result = unicode::scan_text(state, text, 80);
+        CHECK(result.count == 2);
+        CHECK(result.start == text.data());
+        CHECK(result.end == text.data() + 2);
+        CHECK(state.next == text.data() + 2);
+        CHECK(pending_bytes(state) == 0);
+
+        // The same at the very start of the text.
+        auto const bare = std::string(violation) + "cd"s;
+        auto bareState = unicode::scan_state {};
+        auto const bareResult = unicode::scan_text(bareState, bare, 80);
+        CHECK(bareResult.count == 0);
+        CHECK(bareResult.end == bare.data());
+        CHECK(bareState.next == bare.data());
+    }
+}
+
+TEST_CASE("scan.table_3_7.boundary_values_stay_valid")
+{
+    for (auto const sequence: TableThreeSevenBoundaries)
+    {
+        INFO("sequence: " << escape(sequence));
+        auto const text = "a"s + std::string(sequence) + "b"s;
+        auto state = unicode::scan_state {};
+        auto const result = unicode::scan_text(state, text, 80);
+        CHECK(std::string_view(result.start, result.end) == text);
+        CHECK(result.end == text.data() + text.size());
+        CHECK(pending_bytes(state) == 0);
+    }
+}
+
+TEST_CASE("scan.table_3_7.violation_split_across_calls")
+{
+    for (auto const violation: TableThreeSevenViolations)
+    {
+        if (violation.size() < 2 || static_cast<uint8_t>(violation[0]) == 0xC0 || static_cast<uint8_t>(violation[0]) == 0xC1
+            || static_cast<uint8_t>(violation[0]) == 0xF5)
+            continue; // rejected at the lead byte; nothing to split
+        INFO("violation: " << escape(violation));
+        auto state = unicode::scan_state {};
+        // One buffer: a carried lead byte sits directly in front of the next call's text.
+        auto const buffer = std::string(violation) + "cd"s;
+
+        auto const r0 = unicode::scan_text(state, std::string_view(buffer).substr(0, 1), 80);
+        CHECK(r0.count == 0);
+        CHECK(pending_bytes(state) == 1);
+
+        auto const r1 = unicode::scan_text(state, std::string_view(buffer).substr(1), 80);
+        CHECK(r1.count == 0);
+        CHECK(r1.start == buffer.data());
+        CHECK(r1.end == buffer.data());
+        CHECK(state.next == buffer.data());
+        CHECK(pending_bytes(state) == 0);
+    }
+
+    SECTION("a valid second byte completes the character")
+    {
+        auto state = unicode::scan_state {};
+        auto const buffer = "\xE0\xA0\x80"s;
+        CHECK(unicode::scan_text(state, std::string_view(buffer).substr(0, 1), 80).count == 0);
+        auto const r = unicode::scan_text(state, std::string_view(buffer).substr(1), 80);
+        CHECK(r.count == 1);
+        CHECK(r.end == buffer.data() + buffer.size());
+    }
+}
+
+// }}}
 // }}}

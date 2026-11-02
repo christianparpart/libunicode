@@ -147,11 +147,11 @@ namespace detail
 ///   (0x80..0x9F) control ranges count; a C1 byte only stops the scan at a UTF-8 character
 ///   boundary, so a continuation byte that happens to fall in 0x80..0x9F stays part of its codepoint.
 /// - an ill-formed UTF-8 subsequence is about to be processed: a byte that cannot begin a
-///   character (0xA0..0xBF, 0xF8..0xFF), or a character broken off by a byte that cannot continue
-///   it. As at a control, the scan stops in front of the subsequence's first byte and leaves
-///   state.next there, so the caller decodes it under its own replacement policy. Nothing
-///   ill-formed is counted or returned, so no column counted lies outside the returned text.
-///   A character that an earlier call began has its first byte in that call's text, before
+///   character (0x80..0xBF, 0xC0, 0xC1, 0xF5..0xFF), a character that Table 3-7 rules out, or a
+///   character broken off by a byte that cannot continue it. As at a control, the scan stops in front of the subsequence's first
+///   byte and leaves state.next there, so the caller decodes it under its own replacement policy. Nothing ill-formed is counted
+///   or returned, so no column counted lies outside the returned text. A character that an earlier call began has its first byte
+///   in that call's text, before
 ///   @p text: the same place the returned start points to when such a character completes.
 ///
 /// When this function returns, it is guaranteed to not contain an incomplete UTF-8 sequence
@@ -159,8 +159,11 @@ namespace detail
 /// ill-formed: its bytes are consumed into the passed UTF-8 decoder state, and calling this
 /// function again with more bytes will resume decoding it.
 ///
-/// The decoder does not reject overlong forms, surrogates or codepoints past U+10FFFF; it scans
-/// them as the codepoint they encode.
+/// Well-formedness is that of the Unicode Standard's Table 3-7: C0, C1 and F5..FF never begin a
+/// character, and the second byte after E0, ED, F0 and F4 is limited to A0..BF, 80..9F, 90..BF and
+/// 80..8F. Overlong forms, surrogates and codepoints past U+10FFFF are therefore ill-formed and end
+/// the scan like any other ill-formed subsequence; the caller sees them as the maximal subpart they
+/// are and, per the Standard, replaces each one with a single U+FFFD.
 ///
 /// @return scanned textual result. This is, a sequence of complete UTF-8 codepoints, none of
 ///         them ill-formed and none incomplete at the end.

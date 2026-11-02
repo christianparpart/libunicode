@@ -117,6 +117,7 @@ inline char32_t utf8_grapheme_segmenter::iterator::consumeCodepoint() noexcept
     _nextCodepointStart = _nextUtf8;
     while (_nextUtf8 != _end)
     {
+        auto const expectedBefore = _utf8_decoder_state.expectedLength;
         _result = from_utf8(_utf8_decoder_state, uint8_t(*_nextUtf8++));
         if (std::holds_alternative<Success>(_result))
         {
@@ -126,6 +127,9 @@ inline char32_t utf8_grapheme_segmenter::iterator::consumeCodepoint() noexcept
         }
         if (std::holds_alternative<Invalid>(_result))
         {
+            // A byte that broke a character off and cannot start one is decoded again, as itself.
+            if (from_utf8_left_byte_unconsumed(expectedBefore, _utf8_decoder_state))
+                --_nextUtf8;
             auto const result = _nextCodepoint;
             _nextCodepoint = ReplacementChar;
             return result;

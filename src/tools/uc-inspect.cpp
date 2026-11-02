@@ -140,7 +140,14 @@ void codepoints(istream& in) // {{{
 
         totalOffset++;
 
-        auto const convertResult = from_utf8(utf8_state, ch);
+        auto const expectedBefore = utf8_state.expectedLength;
+        auto convertResult = from_utf8(utf8_state, ch);
+        if (holds_alternative<unicode::Invalid>(convertResult)
+            && unicode::from_utf8_left_byte_unconsumed(expectedBefore, utf8_state))
+        {
+            lastOffset = totalOffset - 1;
+            convertResult = from_utf8(utf8_state, ch); // the byte itself, at a character boundary
+        }
 
         if (holds_alternative<unicode::Success>(convertResult))
         {
