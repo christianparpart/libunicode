@@ -259,3 +259,71 @@ TEST_CASE("utf8.iter", "[utf8]")
     REQUIRE(holds_alternative<Success>(result));
     REQUIRE(get<Success>(result).value == U'\U0001F600');
 }
+
+namespace
+{
+/// Decodes @p bytes the way a caller of from_utf8() must: re-feeding a byte that broke a character off
+/// and was not consumed, and replacing each Invalid with one U+FFFD.
+std::u32string decode_with_replacement(std::string_view bytes)
+{
+    auto out = std::u32string {};
+    auto state = utf8_decoder_state {};
+    for (auto const ch: bytes)
+    {
+        auto const value = static_cast<uint8_t>(ch);
+        auto const expectedBefore = state.expectedLength;
+        auto result = from_utf8(state, value);
+        if (holds_alternative<Invalid>(result))
+        {
+            out.push_back(U'\uFFFD');
+            if (from_utf8_left_byte_unconsumed(expectedBefore, state))
+            {
+                result = from_utf8(state, value);
+                if (holds_alternative<Invalid>(result))
+                    out.push_back(U'\uFFFD');
+            }
+        }
+        if (holds_alternative<Success>(result))
+            out.push_back(get<Success>(result).value);
+    }
+    if (state.expectedLength != 0)
+        out.push_back(U'\uFFFD');
+    return out;
+}
+} // namespace
+
+TEST_CASE("utf8.from_utf8.table_3_7.violations", "[utf8]")
+{
+    CHECK(decode_with_replacement("\xC0\x80") == U"\uFFFD\uFFFD");
+    CHECK(decode_with_replacement("\xC1\xBF") == U"\uFFFD\uFFFD");
+    CHECK(decode_with_replacement("\xC0\x9B") == U"\uFFFD\uFFFD");
+    CHECK(decode_with_replacement("\xE0\x80\xAF") == U"\uFFFD\uFFFD\uFFFD");
+    CHECK(decode_with_replacement("\xE0\x9F\xBF") == U"\uFFFD\uFFFD\uFFFD");
+    CHECK(decode_with_replacement("\xED\xA0\x80") == U"\uFFFD\uFFFD\uFFFD");
+    CHECK(decode_with_replacement("\xF0\x80\x80\x80") == U"\uFFFD\uFFFD\uFFFD\uFFFD");
+    CHECK(decode_with_replacement("\xF4\x90\x80\x80") == U"\uFFFD\uFFFD\uFFFD\uFFFD");
+    CHECK(decode_with_replacement("\xF5\x80\x80\x80") == U"\uFFFD\uFFFD\uFFFD\uFFFD");
+    CHECK(decode_with_replacement("\xFF") == U"\uFFFD");
+}
+
+TEST_CASE("utf8.from_utf8.table_3_7.maximal_subparts", "[utf8]")
+{
+    CHECK(decode_with_replacement("\xE0\x80\x41") == U"\uFFFD\uFFFDA");
+    CHECK(decode_with_replacement("\xE2\x82\x41") == U"\uFFFDA");          // one subpart: E2 82
+    CHECK(decode_with_replacement("\xF0\x9F\x98\x41") == U"\uFFFDA");      // one subpart: F0 9F 98
+    CHECK(decode_with_replacement("\xE2\xE2\x82\xAC") == U"\uFFFD\u20AC"); // E2 then a whole euro sign
+    CHECK(decode_with_replacement("\xC3\xFF") == U"\uFFFD\uFFFD");
+    CHECK(decode_with_replacement("\xE1\x80\xE2\xF0\x91\x92\xF1\xBF\x41") == U"\uFFFD\uFFFD\uFFFD\uFFFDA"); // Unicode 3.9 example
+}
+
+TEST_CASE("utf8.from_utf8.table_3_7.boundaries", "[utf8]")
+{
+    CHECK(decode_with_replacement("\xC2\x80") == U"\u0080");
+    CHECK(decode_with_replacement("\xDF\xBF") == U"\u07FF");
+    CHECK(decode_with_replacement("\xE0\xA0\x80") == U"\u0800");
+    CHECK(decode_with_replacement("\xED\x9F\xBF") == U"\uD7FF");
+    CHECK(decode_with_replacement("\xEE\x80\x80") == U"\uE000");
+    CHECK(decode_with_replacement("\xEF\xBF\xBF") == U"\uFFFF");
+    CHECK(decode_with_replacement("\xF0\x90\x80\x80") == U"\U00010000");
+    CHECK(decode_with_replacement("\xF4\x8F\xBF\xBF") == U"\U0010FFFF");
+}

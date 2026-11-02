@@ -16,7 +16,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <format>
+#include <string>
 #include <string_view>
+#include <vector>
 
 using namespace std::string_literals;
 using namespace std::string_view_literals;
@@ -86,4 +88,24 @@ TEST_CASE("utf8_grapheme_segmenter.mixed")
     test_utf8_grapheme_cluster_segmentation(U"├"sv, U"─"sv);
     test_utf8_grapheme_cluster_segmentation(U"├"sv, U"─"sv, U" "sv, U"Y"sv, U"e"sv, U"s"sv);
     test_utf8_grapheme_cluster_segmentation(U"X"sv, U"\U0001F926\U0001F3FC\u200D\u2642\uFE0F"sv, U"5"sv);
+}
+
+TEST_CASE("utf8_grapheme_segmenter.ill_formed_byte_is_decoded_again_as_itself")
+{
+    auto const collect = [](std::string_view text) {
+        auto clusters = std::vector<std::u32string> {};
+        auto const segmenter = unicode::utf8_grapheme_segmenter(text);
+        for (auto it = segmenter.begin(); it != segmenter.end(); ++it)
+            clusters.emplace_back((*it).begin(), (*it).end());
+        return clusters;
+    };
+
+    // C3 is cut off by 'A', which must not be lost.
+    CHECK(collect("\xC3"
+                  "A")
+          == std::vector<std::u32string> { U"\uFFFD", U"A" });
+    // Maximal subparts: C2, C0, C2 are three replacement characters (the last cut off by the following A).
+    CHECK(collect("\xC2\xC0\xC2"
+                  "A")
+          == std::vector<std::u32string> { U"\uFFFD", U"\uFFFD", U"\uFFFD", U"A" });
 }

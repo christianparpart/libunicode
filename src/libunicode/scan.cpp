@@ -127,6 +127,8 @@ scan_result detail::scan_for_text_nonascii(scan_state& state,
     char const* clusterStart = start;
 
     unsigned byteCount = 0; // bytes consumed for the current codepoint
+    // Bytes of the first character that an earlier call consumed; they lie in front of this call's text.
+    unsigned carriedBytes = state.utf8.expectedLength ? state.utf8.currentLength : 0;
 
     // How much of the open cluster's width THIS call has contributed. The cluster may have been
     // opened by an earlier call, whose columns are already spent and cannot be taken back here, so
@@ -167,8 +169,8 @@ scan_result detail::scan_for_text_nonascii(scan_state& state,
             // Inside a character, only a continuation byte may follow; one that merely falls in
             // 0x80..0x9F (e.g. the middle byte of U+2018) is part of its codepoint, not a C1 control.
             // Any other byte -- ASCII, a control, another lead byte, or 0xF8..0xFF -- breaks the
-            // character off and leaves it ill-formed. from_utf8() cannot be asked: it takes any byte
-            // but a lead byte for a continuation byte. The caller decodes the broken character under
+            // character off and leaves it ill-formed. (from_utf8() rejects those too, but this check is
+            // cheaper than a decode.) The caller decodes the broken character under
             // its own replacement policy, so stop in front of its first byte. When an earlier call
             // began the character, that byte lies in the earlier call's text, where resultStart points.
             if (!is_continuation(*input))
@@ -197,6 +199,7 @@ scan_result detail::scan_for_text_nonascii(scan_state& state,
             auto const nextCodepoint = get<Success>(result).value;
             char const* const codepointStart = input - byteCount;
             byteCount = 0;
+            carriedBytes = 0;
             state.lastCodepointHint = nextCodepoint;
 
             bool const breakable = [&] {
@@ -269,10 +272,11 @@ scan_result detail::scan_for_text_nonascii(scan_state& state,
         }
         else
         {
-            // A byte that cannot begin a character (0xA0..0xBF, 0xF8..0xFF). A byte that breaks a character
-            // off was caught above, so this one is ill-formed on its own. Leave it to the caller likewise.
+            // Either a byte that cannot begin a character (0x80..0xBF, C0, C1, F5..FF), or the second byte
+            // of a character that Table 3-7 rules out (an overlong form, a surrogate, or a codepoint past
+            // U+10FFFF). Stop in front of the character's first byte and leave it to the caller likewise.
             assert(holds_alternative<Invalid>(result));
-            stopAt(input - byteCount);
+            stopAt(input - byteCount - carriedBytes);
             break;
         }
     }

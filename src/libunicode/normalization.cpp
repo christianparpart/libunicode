@@ -601,19 +601,24 @@ std::string_view utf8_normalizer::feed(std::string_view utf8Data)
 
     for (auto byte: utf8Data)
     {
+        auto const feedCodepoint = [&](char32_t cp) {
+            auto segment = _inner.feed(cp);
+            if (!segment.empty())
+                convert_to<char>(segment, std::back_inserter(_utf8Output));
+        };
+        // Replaces invalid sequences with U+FFFD; Incomplete continues buffering UTF-8 bytes.
+        auto const feedResult = [&](ConvertResult const& result) {
+            if (std::holds_alternative<Success>(result))
+                feedCodepoint(std::get<Success>(result).value);
+            else if (std::holds_alternative<Invalid>(result))
+                feedCodepoint(char32_t { 0xFFFD });
+        };
+
+        auto const expectedBefore = _utf8State.expectedLength;
         auto const result = from_utf8(_utf8State, static_cast<uint8_t>(byte));
-
-        char32_t cp {};
-        if (std::holds_alternative<Success>(result))
-            cp = std::get<Success>(result).value;
-        else if (std::holds_alternative<Invalid>(result))
-            cp = char32_t { 0xFFFD }; // Replace invalid sequences with U+FFFD
-        else
-            continue; // Incomplete: continue buffering UTF-8 bytes
-
-        auto segment = _inner.feed(cp);
-        if (!segment.empty())
-            convert_to<char>(segment, std::back_inserter(_utf8Output));
+        feedResult(result);
+        if (std::holds_alternative<Invalid>(result) && from_utf8_left_byte_unconsumed(expectedBefore, _utf8State))
+            feedResult(from_utf8(_utf8State, static_cast<uint8_t>(byte)));
     }
 
     return _utf8Output;

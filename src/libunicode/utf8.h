@@ -105,8 +105,36 @@ struct Success { char32_t value; };
 
 using ConvertResult = std::variant<Invalid, Incomplete, Success>;
 
-/// Progressively decodes a UTF-8 codepoint.
+/// Feature macro: from_utf8() accepts well-formed UTF-8 only (Unicode Table 3-7) and reports an
+/// Invalid, rather than a codepoint, for overlong forms, surrogates, codepoints past U+10FFFF, and
+/// a character broken off by a byte that cannot continue it. A byte that breaks a character off
+/// and cannot start one is not consumed; see from_utf8_left_byte_unconsumed().
+#define LIBUNICODE_FROM_UTF8_STRICT 1
+
+/// Progressively decodes a UTF-8 codepoint, accepting well-formed UTF-8 only (Unicode Table 3-7):
+/// C0, C1 and F5..FF never start a character, and the second byte after E0, ED, F0 and F4 is
+/// limited to A0..BF, 80..9F, 90..BF and 80..8F, so overlong forms, surrogates and codepoints
+/// past U+10FFFF are Invalid.
+///
+/// An ill-formed sequence ends at the first byte that cannot continue it, yielding one Invalid for
+/// the bytes before it (a maximal subpart). That byte is then processed as itself:
+/// - Called at a character boundary, the byte that is Invalid on its own is consumed.
+/// - Called inside a character, a byte that may start one (C2..F4) is consumed and starts the next
+///   character, so the following call continues it. Any other byte is NOT consumed: the state is
+///   reset and the caller feeds the byte again.
 ConvertResult from_utf8(utf8_decoder_state& state, uint8_t value) noexcept;
+
+/// Tells a caller of from_utf8() whether the Invalid it just got left the byte it fed unconsumed, so the
+/// caller must feed the same byte again, now at a character boundary.
+///
+/// @param expectedLengthBefore The decoder state's expectedLength before the byte was fed.
+/// @param state The decoder state after the byte was fed.
+/// @return true if the byte broke a character off and cannot start one itself.
+[[nodiscard]] constexpr bool from_utf8_left_byte_unconsumed(unsigned expectedLengthBefore,
+                                                            utf8_decoder_state const& state) noexcept
+{
+    return expectedLengthBefore != 0 && state.expectedLength == 0;
+}
 
 inline unsigned from_utf8i(utf8_decoder_state& state, uint8_t value)
 {
