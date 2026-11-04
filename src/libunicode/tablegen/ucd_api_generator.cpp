@@ -588,7 +588,7 @@ namespace unicode
             std::sort(entries.begin(), entries.end(), [](auto const& a, auto const& b) { return a.abbrev < b.abbrev; });
 
             // Header declaration
-            header << "/// Parses a Unicode version string (e.g., \"1.1\", \"17.0\") to an Age enum value.\n";
+            header << "/// Parses a Unicode version string (e.g., \"1.1\", \"18.0\") to an Age enum value.\n";
             header << "/// @param value The version string from DerivedAge.txt.\n";
             header << "/// @return The corresponding Age enum value, or std::nullopt if not recognized.\n";
             header << "[[nodiscard]] std::optional<Age> make_age(std::string_view value) noexcept;\n\n";

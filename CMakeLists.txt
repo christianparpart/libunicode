@@ -88,11 +88,11 @@ if(LIBUNICODE_TESTING)
 endif()
 
 # ----------------------------------------------------------------------------
-set(LIBUNICODE_UCD_VERSION "17.0.0" CACHE STRING "libunicode: Unicode version")
+set(LIBUNICODE_UCD_VERSION "18.0.0" CACHE STRING "libunicode: Unicode version")
 set(LIBUNICODE_UCD_BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/_ucd" CACHE PATH "Path to directory for downloaded files & extracted directories.")
 
 set(LIBUNICODE_UCD_ZIP_DOWNLOAD_URL "https://www.unicode.org/Public/${LIBUNICODE_UCD_VERSION}/ucd/UCD.zip")
-set(LIBUNICODE_UCD_MD5 "aa35d214bbc24b3b8d07b96bb9db7dca")
+set(LIBUNICODE_UCD_MD5 "0626f2028f8ff16e508e79eca5dc09ba")
 set(LIBUNICODE_UCD_ZIP_FILE "${LIBUNICODE_UCD_BASE_DIR}/ucd-${LIBUNICODE_UCD_VERSION}.zip")
 set(LIBUNICODE_UCD_DIR "${LIBUNICODE_UCD_BASE_DIR}/ucd-${LIBUNICODE_UCD_VERSION}" CACHE PATH "Path to UCD directory.")
 

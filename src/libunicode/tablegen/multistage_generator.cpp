@@ -432,7 +432,7 @@ void generateMultistageFiles(UcdParser const& parser, std::string const& outputD
     // IndicSyllabicCategory (Virama flag)
     //
     // The FULL virama set, deliberately, rather than Indic_Conjunct_Break=Linker. Linker is not
-    // restricted to a handful of scripts -- in UCD 17.0 it already covers Khmer, Myanmar, Javanese,
+    // restricted to a handful of scripts -- in UCD 18.0 it already covers Khmer, Myanmar, Javanese,
     // Chakma and Tai Tham -- but it is a smaller set: 20 codepoints against 41. The 21 it leaves out
     // are viramas that do not form InCB conjuncts, among them Gurmukhi U+0A4D, Tamil U+0BCD,
     // Kannada U+0CCD, Sinhala U+0DCA and the Brahmi-family stackers. They still stack a consonant

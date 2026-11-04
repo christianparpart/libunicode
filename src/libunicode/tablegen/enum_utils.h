@@ -124,8 +124,8 @@ inline auto parseVersionNumber(std::string const& name) -> std::pair<int, int>
     return { major, minor };
 }
 
-/// Build Age enum members sorted by version number: Unassigned, V1_1, V2_0, V2_1, ..., V17_0.
-/// This ensures Age::V1_1 < Age::V2_0 < ... < Age::V10_0 < ... < Age::V17_0.
+/// Build Age enum members sorted by version number: Unassigned, V1_1, V2_0, V2_1, ..., V18_0.
+/// This ensures Age::V1_1 < Age::V2_0 < ... < Age::V10_0 < ... < Age::V18_0.
 inline auto buildAgeEnumMembers(std::map<std::string, std::string> const& aliases) -> std::vector<std::string>
 {
     std::vector<std::string> result;
