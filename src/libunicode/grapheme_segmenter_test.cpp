@@ -135,32 +135,10 @@ TEST_CASE("grapheme_segmenter.gb11_non_extpic_zwj_extpic", "[grapheme_segmenter]
     CHECK_FALSE(gs.codepointsAvailable());
 }
 
-TEST_CASE("grapheme_segmenter.gb11_extpic_double_zwj_extpic", "[grapheme_segmenter][!shouldfail]")
+TEST_CASE("grapheme_segmenter.gb11_extpic_double_zwj_extpic", "[grapheme_segmenter]")
 {
-    // ExtPic + ZWJ + ZWJ + ExtPic (ported from apple/swift
-    // validation-test/stdlib/StringGraphemeBreaking.swift "GB11", rdar://124539686):
-    // MAN + ZWJ + ZWJ + GIRL.
-    //
-    // GB9 keeps each ZWJ attached to whatever precedes it (Man+ZWJ+ZWJ forms one
-    // cluster via two applications of GB9). But UAX #29's GB11 rule is
-    // \p{Extended_Pictographic} Extend* ZWJ x \p{Extended_Pictographic} -- exactly
-    // one terminal ZWJ, not ZWJ*. A second ZWJ must invalidate the match, so the
-    // trailing GIRL should start a new cluster: two clusters total, not one.
-    //
-    // KNOWN BUG (confirmed empirically against the current implementation): the
-    // extpic_state state machine in grapheme_process_breakable()
-    // (src/libunicode/grapheme_segmenter.cpp) treats ZWJ the same as Extend for
-    // state-retention purposes:
-    //
-    //   else if ((B == Grapheme_Cluster_Break::Extend || B == Grapheme_Cluster_Break::ZWJ)
-    //            && prev_extpic_state == 1)
-    //       ; // keep state - Extend/ZWJ extend the ExtPic chain for GB11
-    //
-    // This lets an arbitrary run of ZWJs keep extpic_state == 1, so GB11 still
-    // fires for the second ZWJ's successor. Actual (buggy) result: one cluster of
-    // all 4 codepoints (MAN ZWJ ZWJ GIRL). Expected per spec: two clusters
-    // [MAN ZWJ ZWJ] [GIRL]. Not fixed here per task scope; tagged
-    // [!shouldfail] so it documents the gap without failing CI.
+    // GB9 attaches both ZWJs to MAN, but GB11 does not match multiple ZWJs.
+    // The trailing GIRL therefore starts a new cluster.
     auto const text = u32string_view { U"\U0001F468\u200D\u200D\U0001F467" };
     auto gs = grapheme_segmenter { text };
     CHECK(*gs == u32string_view { U"\U0001F468\u200D\u200D" }); // MAN + ZWJ + ZWJ
@@ -168,6 +146,24 @@ TEST_CASE("grapheme_segmenter.gb11_extpic_double_zwj_extpic", "[grapheme_segment
     ++gs;
     CHECK(*gs == u32string_view { U"\U0001F467" }); // GIRL
     CHECK_FALSE(gs.codepointsAvailable());
+}
+
+TEST_CASE("grapheme_segmenter.gb11_extend_and_zwj", "[grapheme_segmenter]")
+{
+    // An Extend between ZWJs breaks the GB11 ExtPic chain.
+    auto const text1 = u32string_view { U"\U0001F468\u200D\uFE0F\u200D\U0001F467" };
+    auto gs1 = grapheme_segmenter { text1 };
+    CHECK(*gs1 == u32string_view { U"\U0001F468\u200D\uFE0F\u200D" });
+    CHECK(gs1.codepointsAvailable());
+    ++gs1;
+    CHECK(*gs1 == u32string_view { U"\U0001F467" });
+    CHECK_FALSE(gs1.codepointsAvailable());
+
+    // A skin-tone Extend before a single ZWJ still permits GB11.
+    auto const text2 = u32string_view { U"\U0001F468\U0001F3FB\u200D\U0001F467" };
+    auto gs2 = grapheme_segmenter { text2 };
+    CHECK(*gs2 == text2);
+    CHECK_FALSE(gs2.codepointsAvailable());
 }
 
 TEST_CASE("grapheme_segmenter.gb11_ascii_resets_extpic_chain", "[grapheme_segmenter]")

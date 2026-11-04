@@ -105,8 +105,9 @@ bool grapheme_process_breakable(char32_t nextCodepoint, grapheme_segmenter_state
     {
         if (Pb.is_extended_pictographic())
             state.extpic_state = 1;
-        else if ((B == Grapheme_Cluster_Break::Extend || B == Grapheme_Cluster_Break::ZWJ) && prev_extpic_state == 1)
-            ; // keep state - Extend/ZWJ extend the ExtPic chain for GB11
+        else if ((B == Grapheme_Cluster_Break::Extend || B == Grapheme_Cluster_Break::ZWJ) && prev_extpic_state == 1
+                 && A != Grapheme_Cluster_Break::ZWJ)
+            ; // keep state - Extend* ZWJ extends the ExtPic chain for GB11, but only one terminal ZWJ
         else
             state.extpic_state = 0;
     }
